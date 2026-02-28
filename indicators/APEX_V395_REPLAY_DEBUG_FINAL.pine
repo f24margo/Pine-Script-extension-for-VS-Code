@@ -1,0 +1,5 @@
+//@version=5
+indicator("APEX V395 REPLAY DEBUG", overlay=true)
+
+// Базовая проверка: рисуем среднюю цену
+plot(hl2, title="Baseline", color=color.blue)
