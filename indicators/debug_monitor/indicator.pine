@@ -1,0 +1,168 @@
+//@version=6
+indicator("APEX V3.9.5 - Replay Debug Monitor", overlay=true, max_boxes_count=50, max_lines_count=20)
+
+// ============================================================
+// 0. PARAMETRY
+// ============================================================
+
+i_lookback = input.int(40, "IPDA Lookback", options=[20, 40, 60], group="Osnovnye")
+
+// ============================================================
+// 1. BLOK MAKRO
+// ============================================================
+
+float dxy_price = request.security("TVC:DXY",   "60", close, barmerge.gaps_off, barmerge.lookahead_off)
+float spx_price = request.security("SP:SPX",    "60", close, barmerge.gaps_off, barmerge.lookahead_off)
+float us10y     = request.security("TVC:US10Y", "60", close, barmerge.gaps_off, barmerge.lookahead_off)
+
+float dxy_sma = ta.sma(dxy_price, 24)
+float spx_sma = ta.sma(spx_price, 24)
+
+string dxy_trend = dxy_price > dxy_sma ? "BULLISH" : "BEARISH"
+string spx_trend = spx_price > spx_sma ? "RISK-ON" : "RISK-OFF"
+
+float dxy_dist = dxy_sma != 0 ? (dxy_price - dxy_sma) / dxy_sma * 100 : 0.0
+float spx_dist = spx_sma != 0 ? (spx_price - spx_sma) / spx_sma * 100 : 0.0
+
+bool macro_ok = dxy_trend == "BEARISH" and spx_trend == "RISK-ON"
+
+// ============================================================
+// 2. BLOK WEEKLY SWEEP
+// ============================================================
+
+float w_h_BAD = request.security(syminfo.tickerid, "W", high,    barmerge.gaps_off, barmerge.lookahead_on)
+float w_l_BAD = request.security(syminfo.tickerid, "W", low,     barmerge.gaps_off, barmerge.lookahead_on)
+float w_h_FIX = request.security(syminfo.tickerid, "W", high[1], barmerge.gaps_off, barmerge.lookahead_off)
+float w_l_FIX = request.security(syminfo.tickerid, "W", low[1],  barmerge.gaps_off, barmerge.lookahead_off)
+
+float atr      = ta.atr(14)
+float diff_h   = math.abs(w_h_BAD - w_h_FIX)
+float diff_l   = math.abs(w_l_BAD - w_l_FIX)
+float diff_max = math.max(diff_h, diff_l)
+float diff_atr = atr > 0 ? diff_max / atr : 0.0
+bool  repainting = diff_atr > 0.05
+
+bool touch_wh = high >= w_h_FIX
+bool touch_wl = low  <= w_l_FIX
+
+var bool weekly_sweep_hit = false
+if ta.change(time("W")) !=0
+    weekly_sweep_hit := false
+if touch_wh or touch_wl
+    weekly_sweep_hit := true
+
+int dow = dayofweek
+string dow_str = dow == 2 ? "MON" : dow == 3 ? "TUE" : dow == 4 ? "WED" : dow == 5 ? "THU" : dow == 6 ? "FRI" : "WKD"
+
+// ============================================================
+// 3. BLOK IPDA
+// ============================================================
+
+float h_range  = ta.highest(high[1], i_lookback)
+float l_range  = ta.lowest(low[1],   i_lookback)
+float eq       = (h_range + l_range) / 2.0
+float range_sz = h_range - l_range
+
+float pos_pct      = range_sz > 0 ? (close - l_range) / range_sz * 100 : 50.0
+bool  in_discount  = close < eq
+bool  in_premium   = close >= eq
+float dist_to_eq   = close - eq
+float dist_eq_pct  = range_sz > 0 ? math.abs(dist_to_eq) / range_sz * 100 : 0.0
+
+// ============================================================
+// 4. VERDICT
+// ============================================================
+
+bool long_setup  = macro_ok and in_discount and weekly_sweep_hit
+bool short_setup = not macro_ok and in_premium and weekly_sweep_hit
+
+string verdict    = long_setup  ? "LONG SETUP"  : short_setup ? "SHORT SETUP" : macro_ok ? "WAIT" : "AVOID"
+color  verdict_col = long_setup ? color.lime     : short_setup ? color.red     : macro_ok ? color.orange : color.gray
+
+// ============================================================
+// 5. GRAFIK
+// ============================================================
+
+plot(w_h_BAD, "W-High BAD",      color=color.new(color.red,  20), linewidth=2, style=plot.style_stepline)
+plot(w_h_FIX, "W-High FIX",      color=color.new(color.lime, 20), linewidth=2, style=plot.style_stepline)
+plot(w_l_BAD, "W-Low BAD",       color=color.new(color.red,  50), linewidth=1, style=plot.style_stepline)
+plot(w_l_FIX, "W-Low FIX",       color=color.new(color.lime, 50), linewidth=1, style=plot.style_stepline)
+plot(eq, "EQ", color=color.new(color.gray, 40), linewidth=1, style=plot.style_line)
+
+bgcolor(in_discount  ? color.new(color.teal,   93) : na, title="Discount")
+bgcolor(in_premium   ? color.new(color.red,    93) : na, title="Premium")
+bgcolor(repainting   ? color.new(color.yellow, 88) : na, title="Repainting")
+
+plotshape(touch_wl, "W-Low Touch",  shape.triangleup,   location.belowbar, color.teal,   size=size.small)
+plotshape(touch_wh, "W-High Touch", shape.triangledown, location.abovebar, color.maroon, size=size.small)
+
+plotshape(long_setup  and not long_setup[1],  "LONG",  shape.labelup,   location.belowbar, color.lime, text="L", textcolor=color.black, size=size.normal)
+plotshape(short_setup and not short_setup[1], "SHORT", shape.labeldown, location.abovebar, color.red,  text="S", textcolor=color.white, size=size.normal)
+
+// ============================================================
+// 6. LEVAYA PANEL - RABOCHIE ZNACHENIYA
+// ============================================================
+
+var table pw = table.new(position.top_left, 2, 10, bgcolor=color.new(color.black, 55), border_width=1, border_color=color.new(color.gray, 50))
+
+if barstate.islast or barstate.isrealtime
+
+    table.cell(pw, 0, 0, "WORK PANEL",       bgcolor=color.new(color.navy, 20),         text_color=color.white,  text_size=size.small)
+    table.cell(pw, 0, 1, "STATUS",            text_color=color.white,  text_size=size.small)
+    table.cell(pw, 1, 1, verdict,             bgcolor=color.new(verdict_col, 30),        text_color=verdict_col,  text_size=size.small)
+    table.cell(pw, 0, 2, "DXY",               text_color=color.white,  text_size=size.small)
+    table.cell(pw, 1, 2, dxy_trend,           bgcolor=color.new(dxy_trend == "BEARISH" ? color.teal : color.red, 50), text_color=dxy_trend == "BEARISH" ? color.teal : color.red, text_size=size.small)
+    table.cell(pw, 0, 3, "S&P 500",           text_color=color.white,  text_size=size.small)
+    table.cell(pw, 1, 3, spx_trend,           bgcolor=color.new(spx_trend == "RISK-ON"  ? color.teal : color.red, 50), text_color=spx_trend == "RISK-ON"  ? color.teal : color.red, text_size=size.small)
+    table.cell(pw, 0, 4, "US10Y",             text_color=color.white,  text_size=size.small)
+    table.cell(pw, 1, 4, str.tostring(us10y, "#.##") + "%", text_color=color.white, text_size=size.small)
+    table.cell(pw, 0, 5, "IPDA ZONE",         text_color=color.white,  text_size=size.small)
+    table.cell(pw, 1, 5, in_discount ? "DISCOUNT" : "PREMIUM", bgcolor=color.new(in_discount ? color.teal : color.red, 50), text_color=in_discount ? color.teal : color.red, text_size=size.small)
+    table.cell(pw, 0, 6, "W-SWEEP",           text_color=color.white,  text_size=size.small)
+    table.cell(pw, 1, 6, weekly_sweep_hit ? "HIT" : "WAIT", bgcolor=color.new(weekly_sweep_hit ? color.orange : color.gray, 60), text_color=weekly_sweep_hit ? color.orange : color.gray, text_size=size.small)
+    table.cell(pw, 0, 7, "MACRO OK",          text_color=color.white,  text_size=size.small)
+    table.cell(pw, 1, 7, macro_ok ? "YES" : "NO", bgcolor=color.new(macro_ok ? color.lime : color.red, 50), text_color=macro_ok ? color.lime : color.red, text_size=size.small)
+    table.cell(pw, 0, 8, "DAY",               text_color=color.gray,   text_size=size.tiny)
+    table.cell(pw, 1, 8, dow_str,             text_color=color.gray,   text_size=size.tiny)
+    table.cell(pw, 0, 9, "ATR(14)",           text_color=color.gray,   text_size=size.tiny)
+    table.cell(pw, 1, 9, str.tostring(math.round(atr, 2)), text_color=color.gray, text_size=size.tiny)
+
+// ============================================================
+// 7. PRAVAYA PANEL - OTLADOCHNYE ZNACHENIYA
+// ============================================================
+
+var table pd = table.new(position.top_right, 2, 16, bgcolor=color.new(color.black, 55), border_width=1, border_color=color.new(color.gray, 50))
+
+if barstate.islast or barstate.isrealtime
+    table.cell(pd, 0, 0,  "DEBUG PANEL",  bgcolor=color.new(color.purple, 30), text_color=color.white, text_size=size.small)
+    table.cell(pd, 1, 0,  "",             bgcolor=color.new(color.purple, 30), text_color=color.white, text_size=size.small)
+    table.cell(pd, 0, 1,  "-- MACRO --",  bgcolor=color.new(color.navy, 60), text_color=color.new(color.blue, 20), text_size=size.tiny)
+    table.cell(pd, 1, 1,  "",             bgcolor=color.new(color.navy, 60), text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 2,  "DXY/SMA24",   text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 2,  str.tostring(math.round(dxy_price, 2)) + " / " + str.tostring(math.round(dxy_sma, 2)), text_color=color.white, text_size=size.tiny)
+    table.cell(pd, 0, 3,  "DXY dist%",   text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 3,  (dxy_dist >= 0 ? "+" : "") + str.tostring(math.round(dxy_dist, 3)) + "%", text_color=dxy_dist < 0 ? color.teal : color.red, text_size=size.tiny)
+    table.cell(pd, 0, 4,  "SPX dist%",   text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 4,  (spx_dist >= 0 ? "+" : "") + str.tostring(math.round(spx_dist, 3)) + "%", text_color=spx_dist > 0 ? color.teal : color.red, text_size=size.tiny)
+    table.cell(pd, 0, 5,  "-- SWEEP --",  bgcolor=color.new(color.navy, 60), text_color=color.new(color.blue, 20), text_size=size.tiny)
+    table.cell(pd, 1, 5,  "",             bgcolor=color.new(color.navy, 60), text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 6,  "W-H BAD/FIX", text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 6,  str.tostring(math.round(w_h_BAD, 2)) + " / " + str.tostring(math.round(w_h_FIX, 2)), text_color=diff_h > atr * 0.05 ? color.red : color.lime, text_size=size.tiny)
+    table.cell(pd, 0, 7,  "W-L BAD/FIX", text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 7,  str.tostring(math.round(w_l_BAD, 2)) + " / " + str.tostring(math.round(w_l_FIX, 2)), text_color=diff_l > atr * 0.05 ? color.red : color.lime, text_size=size.tiny)
+    table.cell(pd, 0, 8,  "DIFF ATR",    text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 8,  str.tostring(math.round(diff_atr, 4)) + (repainting ? " REPAINT" : " OK"), bgcolor=color.new(repainting ? color.red : color.teal, 70), text_color=repainting ? color.red : color.lime, text_size=size.tiny)
+    table.cell(pd, 0, 9,  "TOUCH NOW",   text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 9,  touch_wh ? "HIGH" : touch_wl ? "LOW" : "--", text_color=(touch_wh or touch_wl) ? color.orange : color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 10, "-- IPDA --",   bgcolor=color.new(color.navy, 60), text_color=color.new(color.blue, 20), text_size=size.tiny)
+    table.cell(pd, 1, 10, "",             bgcolor=color.new(color.navy, 60), text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 11, "Range H/L",   text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 11, str.tostring(math.round(h_range, 2)) + " / " + str.tostring(math.round(l_range, 2)), text_color=color.white, text_size=size.tiny)
+    table.cell(pd, 0, 12, "EQ",          text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 12, str.tostring(math.round(eq, 2)), text_color=color.white, text_size=size.tiny)
+    table.cell(pd, 0, 13, "Pos in range%", text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 13, str.tostring(math.round(pos_pct, 1)) + "% (" + (in_discount ? "DISC" : "PREM") + ")", text_color=pos_pct < 30 ? color.teal : pos_pct > 70 ? color.red : color.orange, text_size=size.tiny)
+    table.cell(pd, 0, 14, "Dist to EQ",  text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 14, (dist_to_eq >= 0 ? "+" : "") + str.tostring(math.round(dist_to_eq, 2)) + " (" + str.tostring(math.round(dist_eq_pct, 1)) + "%)", text_color=color.white, text_size=size.tiny)
+    table.cell(pd, 0, 15, "CONFLUENCE",  bgcolor=color.new(color.black, 30), text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 15, (macro_ok ? "M+" : "M-") + " " + (in_discount or in_premium ? "I+" : "I-") + " " + (weekly_sweep_hit ? "S+" : "S-"), bgcolor=color.new(color.black, 30), text_color=long_setup or short_setup ? color.lime : color.gray, text_size=size.tiny)
