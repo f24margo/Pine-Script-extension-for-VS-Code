@@ -1,0 +1,234 @@
+//@version=6
+indicator("APEX V3.9.5 - Replay Debug Monitor [E2]", overlay=true, max_boxes_count=50, max_lines_count=20)
+
+// ============================================================
+// 0. PARAMETRY
+// ============================================================
+
+i_lookback = input.int(40, "IPDA Lookback", options=[20, 40, 60], group="Core")
+
+bool  i_use_ema   = input.bool(false, "EMA Confluence (vs SMA24)",  group="Macro E2")
+bool  i_use_vix   = input.bool(false, "Use VIX Filter",             group="Macro E2")
+float i_vix_warn  = input.float(20.0, "VIX Warning level",          group="Macro E2", step=1.0)
+float i_vix_panic = input.float(35.0, "VIX Panic level",            group="Macro E2", step=1.0)
+bool  i_use_move  = input.bool(false, "Use MOVE Filter",            group="Macro E2")
+float i_move_warn = input.float(100.0, "MOVE Warning level",        group="Macro E2", step=5.0)
+float i_move_block= input.float(140.0, "MOVE Block level",          group="Macro E2", step=5.0)
+bool  i_use_jpy   = input.bool(false, "Use JPY Filter",             group="Macro E2")
+float i_jpy_drop  = input.float(3.0,  "JPY Drop % threshold (5D)", group="Macro E2", step=0.5)
+
+// ============================================================
+// 1. BLOK MAKRO
+// ============================================================
+
+float dxy_price = request.security("TVC:DXY",   "60", close, barmerge.gaps_off, barmerge.lookahead_off)
+float spx_price = request.security("SP:SPX",    "60", close, barmerge.gaps_off, barmerge.lookahead_off)
+float us10y     = request.security("TVC:US10Y", "60", close, barmerge.gaps_off, barmerge.lookahead_off)
+
+float dxy_sma = ta.sma(dxy_price, 24)
+float spx_sma = ta.sma(spx_price, 24)
+
+float dxy_ema20 = ta.ema(dxy_price, 20)
+float dxy_ema50 = ta.ema(dxy_price, 50)
+float spx_ema20 = ta.ema(spx_price, 20)
+float spx_ema50 = ta.ema(spx_price, 50)
+
+bool dxy_bear_sma = dxy_price < dxy_sma
+bool spx_bull_sma = spx_price > spx_sma
+bool dxy_bear_ema = dxy_price < dxy_ema20 and dxy_ema20 < dxy_ema50
+bool spx_bull_ema = spx_price > spx_ema20 and spx_ema20 > spx_ema50
+
+bool dxy_bear = i_use_ema ? dxy_bear_ema : dxy_bear_sma
+bool spx_bull = i_use_ema ? spx_bull_ema : spx_bull_sma
+
+string dxy_trend = dxy_bear ? "BEARISH" : "BULLISH"
+string spx_trend = spx_bull ? "RISK-ON" : "RISK-OFF"
+
+float dxy_dist = dxy_sma != 0 ? (dxy_price - dxy_sma) / dxy_sma * 100 : 0.0
+float spx_dist = spx_sma != 0 ? (spx_price - spx_sma) / spx_sma * 100 : 0.0
+
+bool macro_ok = dxy_bear and spx_bull
+
+// ============================================================
+// 2. BLOK MACRO E2 — VIX, MOVE, JPY
+// ============================================================
+
+float vix_price  = request.security("CBOE:VIX",  "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+float move_price = request.security("TVC:US10Y", "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+float jpy_price  = request.security("FX:USDJPY", "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+
+string vix_state = vix_price >= i_vix_panic ? "PANIC" : vix_price >= i_vix_warn ? "WARNING" : "OK"
+color  vix_col   = vix_price >= i_vix_panic ? color.red : vix_price >= i_vix_warn ? color.orange : color.teal
+
+string move_state = move_price >= i_move_block ? "BLOCK" : move_price >= i_move_warn ? "WARNING" : "OK"
+color  move_col   = move_price >= i_move_block ? color.red : move_price >= i_move_warn ? color.orange : color.teal
+
+float jpy_5d_ago   = nz(jpy_price[5], jpy_price)
+float jpy_chg_pct  = jpy_5d_ago != 0 ? (jpy_price - jpy_5d_ago) / jpy_5d_ago * 100 : 0.0
+bool  jpy_collapse = jpy_chg_pct <= -i_jpy_drop
+string jpy_state   = jpy_collapse ? "COLLAPSE" : "OK"
+color  jpy_col     = jpy_collapse ? color.red : color.teal
+
+bool override_p1 = (i_use_vix  and vix_price  >= i_vix_panic) or (i_use_move and move_price >= i_move_block) or (i_use_jpy and jpy_collapse)
+bool override_p2 = not override_p1 and ((i_use_vix and vix_price >= i_vix_warn) or (i_use_move and move_price >= i_move_warn))
+
+string override_str = override_p1 ? "P1 BLOCK" : override_p2 ? "P2 WARN" : "NONE"
+color  override_col = override_p1 ? color.red : override_p2 ? color.orange : color.teal
+
+bool macro_e2_ok = not override_p1
+
+// ============================================================
+// 3. BLOK WEEKLY SWEEP
+// ============================================================
+
+float w_h_BAD = request.security(syminfo.tickerid, "W", high,    barmerge.gaps_off, barmerge.lookahead_on)
+float w_l_BAD = request.security(syminfo.tickerid, "W", low,     barmerge.gaps_off, barmerge.lookahead_on)
+float w_h_FIX = request.security(syminfo.tickerid, "W", high[1], barmerge.gaps_off, barmerge.lookahead_off)
+float w_l_FIX = request.security(syminfo.tickerid, "W", low[1],  barmerge.gaps_off, barmerge.lookahead_off)
+
+float atr      = ta.atr(14)
+float diff_h   = math.abs(w_h_BAD - w_h_FIX)
+float diff_l   = math.abs(w_l_BAD - w_l_FIX)
+float diff_max = math.max(diff_h, diff_l)
+float diff_atr = atr > 0 ? diff_max / atr : 0.0
+bool  repainting = diff_atr > 0.05
+
+bool touch_wh = high >= w_h_FIX
+bool touch_wl = low  <= w_l_FIX
+
+var bool weekly_sweep_hit = false
+if ta.change(time("W")) != 0
+    weekly_sweep_hit := false
+if touch_wh or touch_wl
+    weekly_sweep_hit := true
+
+int dow = dayofweek
+string dow_str = dow == 2 ? "MON" : dow == 3 ? "TUE" : dow == 4 ? "WED" : dow == 5 ? "THU" : dow == 6 ? "FRI" : "WKD"
+
+// ============================================================
+// 4. BLOK IPDA
+// ============================================================
+
+float h_range  = ta.highest(high[1], i_lookback)
+float l_range  = ta.lowest(low[1],   i_lookback)
+float eq       = (h_range + l_range) / 2.0
+float range_sz = h_range - l_range
+
+float pos_pct     = range_sz > 0 ? (close - l_range) / range_sz * 100 : 50.0
+bool  in_discount = close < eq
+bool  in_premium  = close >= eq
+float dist_to_eq  = close - eq
+float dist_eq_pct = range_sz > 0 ? math.abs(dist_to_eq) / range_sz * 100 : 0.0
+
+// ============================================================
+// 5. VERDICT
+// ============================================================
+
+bool long_setup  = macro_ok and macro_e2_ok and in_discount and weekly_sweep_hit
+bool short_setup = not macro_ok and macro_e2_ok and in_premium and weekly_sweep_hit
+
+string verdict    = long_setup  ? "LONG SETUP"  : short_setup ? "SHORT SETUP" : override_p1 ? "AVOID P1" : macro_ok ? "WAIT" : "AVOID"
+color  verdict_col = long_setup ? color.lime     : short_setup ? color.red     : override_p1 ? color.red  : macro_ok ? color.orange : color.gray
+
+// ============================================================
+// 6. GRAFIK
+// ============================================================
+
+plot(w_h_BAD, "W-High BAD", color=color.new(color.red,  20), linewidth=2, style=plot.style_stepline)
+plot(w_h_FIX, "W-High FIX", color=color.new(color.lime, 20), linewidth=2, style=plot.style_stepline)
+plot(w_l_BAD, "W-Low BAD",  color=color.new(color.red,  50), linewidth=1, style=plot.style_stepline)
+plot(w_l_FIX, "W-Low FIX",  color=color.new(color.lime, 50), linewidth=1, style=plot.style_stepline)
+plot(eq,       "EQ",         color=color.new(color.gray, 40), linewidth=1, style=plot.style_line)
+
+bgcolor(in_discount ? color.new(color.teal,   93) : na, title="Discount")
+bgcolor(in_premium  ? color.new(color.red,    93) : na, title="Premium")
+bgcolor(repainting  ? color.new(color.yellow, 88) : na, title="Repainting")
+bgcolor(override_p1 ? color.new(color.red,    80) : na, title="P1 Override")
+
+plotshape(touch_wl, "W-Low Touch",  shape.triangleup,   location.belowbar, color.teal,   size=size.small)
+plotshape(touch_wh, "W-High Touch", shape.triangledown, location.abovebar, color.maroon, size=size.small)
+
+plotshape(long_setup  and not long_setup[1],  "LONG",  shape.labelup,   location.belowbar, color.lime, text="L", textcolor=color.black, size=size.normal)
+plotshape(short_setup and not short_setup[1], "SHORT", shape.labeldown, location.abovebar, color.red,  text="S", textcolor=color.white, size=size.normal)
+
+// ============================================================
+// 7. LEVAYA PANEL - RABOCHIE ZNACHENIYA
+// ============================================================
+
+var table pw = table.new(position.top_left, 2, 11, bgcolor=color.new(color.black, 55), border_width=1, border_color=color.new(color.gray, 50))
+
+if barstate.islast or barstate.isrealtime
+    table.cell(pw, 0, 0,  "WORK PANEL",  bgcolor=color.new(color.navy, 20), text_color=color.white, text_size=size.small)
+    table.cell(pw, 1, 0,  "E2",          bgcolor=color.new(color.navy, 20), text_color=color.new(color.blue, 20), text_size=size.small)
+    table.cell(pw, 0, 1,  "STATUS",      text_color=color.white, text_size=size.small)
+    table.cell(pw, 1, 1,  verdict,       bgcolor=color.new(verdict_col, 30), text_color=verdict_col, text_size=size.small)
+    table.cell(pw, 0, 2,  "DXY",         text_color=color.white, text_size=size.small)
+    table.cell(pw, 1, 2,  dxy_trend,     bgcolor=color.new(dxy_bear ? color.teal : color.red, 50), text_color=dxy_bear ? color.teal : color.red, text_size=size.small)
+    table.cell(pw, 0, 3,  "S&P 500",     text_color=color.white, text_size=size.small)
+    table.cell(pw, 1, 3,  spx_trend,     bgcolor=color.new(spx_bull ? color.teal : color.red, 50), text_color=spx_bull ? color.teal : color.red, text_size=size.small)
+    table.cell(pw, 0, 4,  "US10Y",       text_color=color.white, text_size=size.small)
+    table.cell(pw, 1, 4,  str.tostring(us10y, "#.##") + "%", text_color=color.white, text_size=size.small)
+    table.cell(pw, 0, 5,  "OVERRIDE",    text_color=color.white, text_size=size.small)
+    table.cell(pw, 1, 5,  override_str,  bgcolor=color.new(override_col, 40), text_color=override_col, text_size=size.small)
+    table.cell(pw, 0, 6,  "IPDA ZONE",   text_color=color.white, text_size=size.small)
+    table.cell(pw, 1, 6,  in_discount ? "DISCOUNT" : "PREMIUM", bgcolor=color.new(in_discount ? color.teal : color.red, 50), text_color=in_discount ? color.teal : color.red, text_size=size.small)
+    table.cell(pw, 0, 7,  "W-SWEEP",     text_color=color.white, text_size=size.small)
+    table.cell(pw, 1, 7,  weekly_sweep_hit ? "HIT" : "WAIT", bgcolor=color.new(weekly_sweep_hit ? color.orange : color.gray, 60), text_color=weekly_sweep_hit ? color.orange : color.gray, text_size=size.small)
+    table.cell(pw, 0, 8,  "MACRO OK",    text_color=color.white, text_size=size.small)
+    table.cell(pw, 1, 8,  macro_ok ? "YES" : "NO", bgcolor=color.new(macro_ok ? color.lime : color.red, 50), text_color=macro_ok ? color.lime : color.red, text_size=size.small)
+    table.cell(pw, 0, 9,  "DAY",         text_color=color.gray, text_size=size.tiny)
+    table.cell(pw, 1, 9,  dow_str,       text_color=color.gray, text_size=size.tiny)
+    table.cell(pw, 0, 10, "ATR(14)",     text_color=color.gray, text_size=size.tiny)
+    table.cell(pw, 1, 10, str.tostring(math.round(atr, 2)), text_color=color.gray, text_size=size.tiny)
+
+// ============================================================
+// 8. PRAVAYA PANEL - OTLADOCHNYE ZNACHENIYA
+// ============================================================
+
+var table pd = table.new(position.top_right, 2, 22, bgcolor=color.new(color.black, 55), border_width=1, border_color=color.new(color.gray, 50))
+
+if barstate.islast or barstate.isrealtime
+    table.cell(pd, 0, 0,  "DEBUG PANEL",   bgcolor=color.new(color.purple, 30), text_color=color.white, text_size=size.small)
+    table.cell(pd, 1, 0,  "E2",            bgcolor=color.new(color.purple, 30), text_color=color.new(color.blue, 20), text_size=size.small)
+    table.cell(pd, 0, 1,  "-- MACRO E1 --", bgcolor=color.new(color.navy, 60), text_color=color.new(color.blue, 20), text_size=size.tiny)
+    table.cell(pd, 1, 1,  "",              bgcolor=color.new(color.navy, 60), text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 2,  "DXY/SMA24",    text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 2,  str.tostring(math.round(dxy_price, 2)) + " / " + str.tostring(math.round(dxy_sma, 2)), text_color=color.white, text_size=size.tiny)
+    table.cell(pd, 0, 3,  "DXY dist%",    text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 3,  (dxy_dist >= 0 ? "+" : "") + str.tostring(math.round(dxy_dist, 3)) + "%", text_color=dxy_dist < 0 ? color.teal : color.red, text_size=size.tiny)
+    table.cell(pd, 0, 4,  "SPX dist%",    text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 4,  (spx_dist >= 0 ? "+" : "") + str.tostring(math.round(spx_dist, 3)) + "%", text_color=spx_dist > 0 ? color.teal : color.red, text_size=size.tiny)
+    table.cell(pd, 0, 5,  "EMA mode",     text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 5,  i_use_ema ? "ON EMA20/50" : "OFF SMA24", text_color=i_use_ema ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 6,  "-- MACRO E2 --", bgcolor=color.new(color.purple, 60), text_color=color.new(color.purple, 0), text_size=size.tiny)
+    table.cell(pd, 1, 6,  "",             bgcolor=color.new(color.purple, 60), text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 7,  "VIX",          text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 7,  str.tostring(math.round(vix_price, 2)) + "  " + vix_state + (not i_use_vix ? " [OFF]" : ""), bgcolor=color.new(vix_col, 70), text_color=vix_col, text_size=size.tiny)
+    table.cell(pd, 0, 8,  "MOVE",         text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 8,  str.tostring(math.round(move_price, 1)) + "  " + move_state + (not i_use_move ? " [OFF]" : ""), bgcolor=color.new(move_col, 70), text_color=move_col, text_size=size.tiny)
+    table.cell(pd, 0, 9,  "JPY 5D chg",   text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 9,  (jpy_chg_pct >= 0 ? "+" : "") + str.tostring(math.round(jpy_chg_pct, 2)) + "%  " + jpy_state + (not i_use_jpy ? " [OFF]" : ""), bgcolor=color.new(jpy_col, 70), text_color=jpy_col, text_size=size.tiny)
+    table.cell(pd, 0, 10, "OVERRIDE",     text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 10, override_str,   bgcolor=color.new(override_col, 50), text_color=override_col, text_size=size.tiny)
+    table.cell(pd, 0, 11, "-- SWEEP --",  bgcolor=color.new(color.navy, 60), text_color=color.new(color.blue, 20), text_size=size.tiny)
+    table.cell(pd, 1, 11, "",             bgcolor=color.new(color.navy, 60), text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 12, "W-H BAD/FIX", text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 12, str.tostring(math.round(w_h_BAD, 2)) + " / " + str.tostring(math.round(w_h_FIX, 2)), text_color=diff_h > atr * 0.05 ? color.red : color.lime, text_size=size.tiny)
+    table.cell(pd, 0, 13, "W-L BAD/FIX", text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 13, str.tostring(math.round(w_l_BAD, 2)) + " / " + str.tostring(math.round(w_l_FIX, 2)), text_color=diff_l > atr * 0.05 ? color.red : color.lime, text_size=size.tiny)
+    table.cell(pd, 0, 14, "DIFF ATR",    text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 14, str.tostring(math.round(diff_atr, 4)) + (repainting ? " REPAINT" : " OK"), bgcolor=color.new(repainting ? color.red : color.teal, 70), text_color=repainting ? color.red : color.lime, text_size=size.tiny)
+    table.cell(pd, 0, 15, "TOUCH NOW",   text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 15, touch_wh ? "HIGH" : touch_wl ? "LOW" : "--", text_color=(touch_wh or touch_wl) ? color.orange : color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 16, "-- IPDA --",  bgcolor=color.new(color.navy, 60), text_color=color.new(color.blue, 20), text_size=size.tiny)
+    table.cell(pd, 1, 16, "",            bgcolor=color.new(color.navy, 60), text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 0, 17, "Range H/L",   text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 17, str.tostring(math.round(h_range, 2)) + " / " + str.tostring(math.round(l_range, 2)), text_color=color.white, text_size=size.tiny)
+    table.cell(pd, 0, 18, "EQ",          text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 18, str.tostring(math.round(eq, 2)), text_color=color.white, text_size=size.tiny)
+    table.cell(pd, 0, 19, "Pos in range%", text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 19, str.tostring(math.round(pos_pct, 1)) + "% (" + (in_discount ? "DISC" : "PREM") + ")", text_color=pos_pct < 30 ? color.teal : pos_pct > 70 ? color.red : color.orange, text_size=size.tiny)
+    table.cell(pd, 0, 20, "Dist to EQ",  text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 20, (dist_to_eq >= 0 ? "+" : "") + str.tostring(math.round(dist_to_eq, 2)) + " (" + str.tostring(math.round(dist_eq_pct, 1)) + "%)", text_color=color.white, text_size=size.tiny)
+    table.cell(pd, 0, 21, "CONFLUENCE",  bgcolor=color.new(color.black, 30), text_color=color.gray, text_size=size.tiny)
+    table.cell(pd, 1, 21, (macro_ok ? "M+" : "M-") + " " + (macro_e2_ok ? "E2+" : "E2-") + " " + (in_discount or in_premium ? "I+" : "I-") + " " + (weekly_sweep_hit ? "S+" : "S-"), bgcolor=color.new(color.black, 30), text_color=long_setup or short_setup ? color.lime : color.gray, text_size=size.tiny)
