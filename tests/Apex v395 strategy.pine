@@ -15,6 +15,7 @@ strategy(
 i_lookback = input.int(40, "IPDA Lookback", options=[20, 40, 60], group="Core")
 
 // --- Stop/TP Engine ---
+bool i_use_sl_tp  = input.bool(false, "Use SL/TP Filter", group="Stop/TP Engine")  // Нова кнопка для вмикання/вимикання SL/TP як фільтра
 string i_sl_mode  = input.string("ATR", "SL/TP Mode",
      options=["ATR", "VWAP", "ADX"], group="Stop/TP Engine")
 
@@ -189,6 +190,7 @@ float long_tp2 = close + tp2_dist
 float short_sl  = close + sl_dist
 float short_tp1 = close - tp1_dist
 float short_tp2 = close - tp2_dist
+
 // ============================================================
 // 8. ENTRIES
 // ============================================================
@@ -233,6 +235,7 @@ if i_use_tp2
          limit  = short_tp2,
          qty_percent = 50,
          comment = "TP2")
+
 // ============================================================
 // 10. STATISTICS COUNTERS
 // ============================================================
@@ -266,6 +269,7 @@ if ((raw_long and not raw_long[1]) or (raw_short and not raw_short[1])) and f_ma
     cnt_adx_blocked += 1
 if ((raw_long and not raw_long[1]) or (raw_short and not raw_short[1])) and f_macro_e2 and f_adx and not f_rvol
     cnt_rvol_blocked += 1
+
 // ============================================================
 // 11. VISUALIZATION
 // ============================================================
