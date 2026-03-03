@@ -34,6 +34,10 @@ apex-icc/
 ├── tests/
 │   └── APEX_V395_REPAINT_DETECTOR_v2.pine  # Repainting test harness
 └── README.md
+├── docs/
+│   ├── research_journal/    # Данные ETHUSDT_2025.csv
+│   ├── observations.md      # Заметки по Replay
+│   └── calibration.md       # Пороги VIX/DXY
 ```
 
 ---
