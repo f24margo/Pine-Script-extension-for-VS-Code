@@ -1,3 +1,73 @@
+
+# APEX ICC V3.0 — CORE FULL STABLE
+> **Техническая документация по архитектуре системы**
+
+**Аудитория:** Инженер-программист (Pine Script / TradingView) · Финансовый аналитик  
+**Версия документа:** 1.0 | **Базовый код:** `APEX_ICC_V3_CORE_STABLE.pine`
+
+---
+
+## 1. Концепция системы
+**APEX ICC (Integrated Confluence Checker)** — это высокотехнологичный агрегатор сигналов для TradingView (Pine Script v5). Система решает проблему «аналитического паралича», объединяя макроэкономику, рыночную структуру, моментум и тайминг в единый числовой **Score**.
+
+**Вердикт системы:**
+* 🟢 **ENTER** — Полная конфлюэнция всех слоев.
+* 🟡 **WAIT** — Рынок неопределен, недостаточно условий.
+* 🔴 **AVOID** — Высокие риски или отсутствие структуры.
+
+---
+
+## 2. Архитектура: Семь уровней анализа (Pipeline)
+
+### L0: FOUNDATION (Основание)
+Использование **UDT (User Defined Types)** для инкапсуляции данных. Это исключает глобальное засорение переменных и обеспечивает модульность.
+
+```pinescript
+type ApexScore
+    int total     = 0
+    int macro     = 0
+    int structure = 0
+    int timing    = 0
+    int sentiment = 0 // Reserved for V3.1
+
+
+
+
+
+
+# APEX ICC V3.0 — CORE FULL STABLE
+> **Техническая документация по архитектуре системы**
+
+**Аудитория:** Инженер-программист (Pine Script / TradingView) · Финансовый аналитик  
+**Версия документа:** 1.0 | **Базовый код:** `APEX_ICC_V3_CORE_STABLE.pine`
+
+---
+
+## 1. Концепция системы
+**APEX ICC (Integrated Confluence Checker)** — это высокотехнологичный агрегатор сигналов для TradingView (Pine Script v5). Система решает проблему «аналитического паралича», объединяя макроэкономику, рыночную структуру, моментум и тайминг в единый числовой **Score**.
+
+**Вердикт системы:**
+* 🟢 **ENTER** — Полная конфлюэнция всех слоев.
+* 🟡 **WAIT** — Рынок неопределен, недостаточно условий.
+* 🔴 **AVOID** — Высокие риски или отсутствие структуры.
+
+---
+
+## 2. Архитектура: Семь уровней анализа (Pipeline)
+
+### L0: FOUNDATION (Основание)
+Использование **UDT (User Defined Types)** для инкапсуляции данных. Это исключает глобальное засорение переменных и обеспечивает модульность.
+
+```pinescript
+type ApexScore
+    int total     = 0
+    int macro     = 0
+    int structure = 0
+    int timing    = 0
+    int sentiment = 0 // Reserved for V3.1
+
+
+
 # APEX ICC — Integrated Confluence Checker
 
 TradingView indicator system for institutional-grade market analysis.
