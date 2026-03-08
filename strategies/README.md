@@ -330,3 +330,11 @@ disc/prem | sweep | adx_phase | rvol | btc_state | WIN/LOSS
 
 
 APEX V3.9.5 Strategy Tester  ·  E2 + Log Edition  ·  Pine Script v6  ·  TradingView
+
+## 📸 Галерея результатов (Screenshots)
+| Описание | Скриншот |
+|---|---|
+| **VIX Crash Alert (March)** | ![VIX Crash](../docs/screenshots/ETHUSDT_March_Crash_VIX_23.png) |
+| **Результаты 1Кв 2024** | ![1Q24](../docs/screenshots/1Кв24.png) |
+| **Результаты 2Кв 2023** | ![2Q23](../docs/screenshots/2Кв23.png) |
+| **Результаты 3Кв 2023** | ![3Q23](../docs/screenshots/3Кв23.png) |
