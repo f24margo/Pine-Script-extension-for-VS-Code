@@ -1,0 +1,238 @@
+//@version=6
+indicator("APEX Data Monitor [v1.1]", overlay=false, max_lines_count=10)
+
+// ============================================================
+// 0. INPUTS
+// ============================================================
+
+string i_view     = input.string("SCORE",  "Display Mode",
+     options=["MACRO", "STRUCTURE", "SCORE", "MTF"],
+     group="Core", tooltip="MACRO=VIX/DXY/SPX/JPY | STRUCTURE=IPDA/EQ/ATR | SCORE=Confluence line | MTF=W+D+H4 scores")
+
+string i_tf_w     = input.string("W",    "Timeframe Weekly",  group="Core", options=["W", "3D"])
+string i_tf_d     = input.string("D",    "Timeframe Daily",   group="Core", options=["D", "720", "480"])
+string i_tf_h4    = input.string("240",  "Timeframe H4",      group="Core", options=["240", "180", "120"])
+
+int    i_lookback = input.int(40, "IPDA Lookback", options=[20, 40, 60], group="Core")
+bool   i_use_ema  = input.bool(false, "EMA Confluence (vs SMA24)", group="Core")
+
+float i_vix_warn  = input.float(20.0, "VIX Warning",  group="Macro E2", step=1.0)
+float i_vix_panic = input.float(35.0, "VIX Panic",    group="Macro E2", step=1.0)
+float i_jpy_drop  = input.float(3.0,  "JPY Drop% 5D", group="Macro E2", step=0.5)
+float i_move_warn = input.float(100.0, "MOVE Warning", group="Macro E2", step=5.0)
+float i_move_blk  = input.float(140.0, "MOVE Block",   group="Macro E2", step=5.0)
+
+int   i_lw        = input.int(2, "Line Width", options=[1, 2, 3], group="Display")
+bool  i_show_lvl  = input.bool(true, "Show Reference Levels", group="Display")
+bool  i_normalize = input.bool(true, "Normalize to 0-100",    group="Display",
+     tooltip="Normalizes all lines to 0-100 scale for easy comparison")
+
+color i_col_bull  = input.color(color.lime,   "Bull color",    group="Colors")
+color i_col_bear  = input.color(color.red,    "Bear color",    group="Colors")
+color i_col_neut  = input.color(color.gray,   "Neutral color", group="Colors")
+color i_col_w     = input.color(color.yellow, "Weekly color",  group="Colors")
+color i_col_d     = input.color(color.aqua,   "Daily color",   group="Colors")
+color i_col_h4    = input.color(color.orange, "H4 color",      group="Colors")
+
+float i_alert_score = input.float(3.0, "Alert when Score >=", group="Alerts", step=0.5, minval=1.0, maxval=5.0)
+bool  i_alert_vix   = input.bool(false, "Alert VIX Warning",  group="Alerts")
+
+// ============================================================
+// 1. ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ADX
+// ============================================================
+
+f_get_adx() =>
+    [_, _, adx] = ta.dmi(14, 14)
+    adx
+
+// ============================================================
+// 2. ФУНКЦИЯ ВЫЧИСЛЕНИЯ ВСЕХ ПАРАМЕТРОВ ДЛЯ ЗАДАННОГО ТФ
+// ============================================================
+
+f_calc(tf) =>
+    // --- Macro E1 ---
+    float dxy = request.security("TVC:DXY", tf, close, barmerge.gaps_off, barmerge.lookahead_off)
+    float spx = request.security("SP:SPX",  tf, close, barmerge.gaps_off, barmerge.lookahead_off)
+
+    float dxy_sma   = ta.sma(dxy, 24)
+    float spx_sma   = ta.sma(spx, 24)
+    float dxy_ema20 = ta.ema(dxy, 20)
+    float dxy_ema50 = ta.ema(dxy, 50)
+    float spx_ema20 = ta.ema(spx, 20)
+    float spx_ema50 = ta.ema(spx, 50)
+
+    bool dxy_bear = i_use_ema ? (dxy < dxy_ema20 and dxy_ema20 < dxy_ema50) : dxy < dxy_sma
+    bool spx_bull = i_use_ema ? (spx > spx_ema20 and spx_ema20 > spx_ema50) : spx > spx_sma
+
+    float dxy_dist = dxy_sma != 0 ? (dxy - dxy_sma) / dxy_sma * 100 : 0.0
+    float spx_dist = spx_sma != 0 ? (spx - spx_sma) / spx_sma * 100 : 0.0
+    bool  macro_ok = dxy_bear and spx_bull
+
+    // --- Macro E2 --- FIX: TVC:MOVE вместо US10Y ---
+    float vix  = request.security("CBOE:VIX",  "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+    float jpy  = request.security("FX:USDJPY", "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+    float move = request.security("TVC:MOVE",  "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+
+    float jpy5d       = nz(jpy[5], jpy)
+    float jpy_chg     = jpy5d != 0 ? (jpy - jpy5d) / jpy5d * 100 : 0.0
+    bool  jpy_col     = jpy_chg <= -i_jpy_drop
+    bool  override_p1 = vix >= i_vix_panic or move >= i_move_blk or jpy_col
+    bool  macro_e2    = not override_p1
+
+    // --- Weekly Sweep ---
+    float w_h = request.security(syminfo.tickerid, "W", high[1], barmerge.gaps_off, barmerge.lookahead_off)
+    float w_l = request.security(syminfo.tickerid, "W", low[1],  barmerge.gaps_off, barmerge.lookahead_off)
+
+    bool touch_h = request.security(syminfo.tickerid, tf, high, barmerge.gaps_off, barmerge.lookahead_off) >= w_h
+    bool touch_l = request.security(syminfo.tickerid, tf, low,  barmerge.gaps_off, barmerge.lookahead_off) <= w_l
+
+    var bool sweep = false
+    if ta.change(time("W")) != 0
+        sweep := false
+    if touch_h or touch_l
+        sweep := true
+
+    // --- IPDA ---
+    float cl    = request.security(syminfo.tickerid, tf, close,      barmerge.gaps_off, barmerge.lookahead_off)
+    float hi    = request.security(syminfo.tickerid, tf, high,       barmerge.gaps_off, barmerge.lookahead_off)
+    float lo    = request.security(syminfo.tickerid, tf, low,        barmerge.gaps_off, barmerge.lookahead_off)
+    float atr_v = request.security(syminfo.tickerid, tf, ta.atr(14), barmerge.gaps_off, barmerge.lookahead_off)
+
+    float h_range = ta.highest(hi[1], i_lookback)
+    float l_range = ta.lowest(lo[1],  i_lookback)
+    float eq      = (h_range + l_range) / 2.0
+    float rng_sz  = h_range - l_range
+
+    float pos_pct = rng_sz > 0 ? (cl - l_range) / rng_sz * 100 : 50.0
+    bool  in_disc = cl < eq
+    bool  in_prem = cl >= eq
+    float dist_eq = rng_sz > 0 ? math.abs(cl - eq) / rng_sz * 100 : 0.0
+
+    // --- Repainting diff ---
+    float w_h_bad = request.security(syminfo.tickerid, "W", high, barmerge.gaps_off, barmerge.lookahead_on)
+    float w_l_bad = request.security(syminfo.tickerid, "W", low,  barmerge.gaps_off, barmerge.lookahead_on)
+    float diff_atr = atr_v > 0 ? math.max(math.abs(w_h_bad - w_h), math.abs(w_l_bad - w_l)) / atr_v : 0.0
+
+    // --- ADX E3 ---
+    float adx_val  = request.security(syminfo.tickerid, tf, f_get_adx(), barmerge.gaps_off, barmerge.lookahead_off)
+    bool  adx_ok   = adx_val >= 25
+
+    // --- Confluence Score 0-5 (скелет до 8) ---
+    int score = 0
+    if macro_ok
+        score += 1
+    if macro_e2
+        score += 1
+    bool ipda_ok = macro_ok ? in_disc : in_prem   // FIX: умный IPDA
+    if ipda_ok
+        score += 1
+    if sweep
+        score += 1
+    if adx_ok
+        score += 1
+    // E4 RVOL → +1 placeholder
+    // E5 FVG  → +1 placeholder
+    // E5 KZ   → +1 placeholder
+
+    [macro_ok, macro_e2, dxy_dist, spx_dist, vix, jpy_chg, move,
+     pos_pct, dist_eq, diff_atr, atr_v, float(score), in_disc, override_p1]
+
+// ============================================================
+// 3. ВЫЧИСЛЯЕМ ДЛЯ ВСЕХ ТРЁХ ТФ
+// ============================================================
+
+[m_ok_d, e2_ok_d, dxy_d, spx_d, vix_d, jpy_d, move_d, pos_d, deq_d, datr_d, atr_d, score_d, disc_d, p1_d]   = f_calc(i_tf_d)
+[m_ok_w, e2_ok_w, dxy_w, spx_w, vix_w, jpy_w, move_w, pos_w, deq_w, datr_w, atr_w, score_w, disc_w, p1_w]   = f_calc(i_tf_w)
+[m_ok_h4,e2_ok_h4,dxy_h4,spx_h4,vix_h4,jpy_h4,move_h4,pos_h4,deq_h4,datr_h4,atr_h4,score_h4,disc_h4,p1_h4] = f_calc(i_tf_h4)
+
+// ============================================================
+// 4. НОРМАЛИЗАЦИЯ
+// ============================================================
+
+f_norm(val, mn, mx) =>
+    mx != mn ? math.min(math.max((val - mn) / (mx - mn) * 100, 0), 100) : 50.0
+
+float vix_plot  = i_normalize ? f_norm(vix_d,  10,  50) : vix_d
+float dxy_plot  = i_normalize ? f_norm(dxy_d,  -3,   3) : dxy_d
+float spx_plot  = i_normalize ? f_norm(spx_d,  -3,   3) : spx_d
+float jpy_plot  = i_normalize ? f_norm(jpy_d,  -5,   5) : jpy_d
+float pos_plot  = pos_d
+float deq_plot  = i_normalize ? f_norm(deq_d,   0,  50) : deq_d
+float datr_plot = i_normalize ? f_norm(datr_d,  0,  10) : datr_d
+
+float score_d_pct  = score_d  / 5.0 * 100
+float score_w_pct  = score_w  / 5.0 * 100
+float score_h4_pct = score_h4 / 5.0 * 100
+
+// ============================================================
+// 5. PLOT — MACRO MODE
+// ============================================================
+
+bool show_macro = i_view == "MACRO"
+
+plot(show_macro ? vix_plot : na, "VIX",      color=p1_d ? i_col_bear : vix_d >= i_vix_warn ? color.orange : i_col_bull, linewidth=i_lw)
+plot(show_macro ? dxy_plot : na, "DXY dist%", color=m_ok_d ? i_col_bull : i_col_bear, linewidth=i_lw)
+plot(show_macro ? spx_plot : na, "SPX dist%", color=m_ok_d ? i_col_bull : i_col_bear, linewidth=i_lw)
+plot(show_macro ? jpy_plot : na, "JPY 5D%",   color=jpy_d <= -i_jpy_drop ? i_col_bear : i_col_neut, linewidth=i_lw)
+
+hline(show_macro and i_show_lvl ? (i_normalize ? f_norm(i_vix_warn,  10, 50) : i_vix_warn)  : na, "VIX Warn",  color=color.new(color.orange, 50), linestyle=hline.style_dashed)
+hline(show_macro and i_show_lvl ? (i_normalize ? f_norm(i_vix_panic, 10, 50) : i_vix_panic) : na, "VIX Panic", color=color.new(color.red,    50), linestyle=hline.style_dashed)
+hline(show_macro and i_show_lvl ? 50 : na, "Zero line", color=color.new(color.gray, 70), linestyle=hline.style_dotted)
+
+// ============================================================
+// 6. PLOT — STRUCTURE MODE
+// ============================================================
+
+bool show_str = i_view == "STRUCTURE"
+
+plot(show_str ? pos_plot  : na, "IPDA Pos%", color=disc_d ? i_col_bull : i_col_bear, linewidth=i_lw)
+plot(show_str ? deq_plot  : na, "EQ Dist%",  color=i_col_neut, linewidth=i_lw)
+plot(show_str ? datr_plot : na, "Diff ATR",  color=datr_d > 0.05 ? i_col_bear : i_col_bull, linewidth=i_lw)
+
+hline(show_str and i_show_lvl ? 50 : na, "EQ level",     color=color.new(color.gray, 50), linestyle=hline.style_dashed)
+hline(show_str and i_show_lvl ? 30 : na, "Deep Discount", color=color.new(color.lime, 60), linestyle=hline.style_dotted)
+hline(show_str and i_show_lvl ? 70 : na, "Deep Premium",  color=color.new(color.red,  60), linestyle=hline.style_dotted)
+
+// ============================================================
+// 7. PLOT — SCORE MODE
+// ============================================================
+
+bool show_score = i_view == "SCORE"
+
+float price_chg     = close != 0 ? (close - close[1]) / close[1] * 100 : 0.0
+float price_chg_norm = i_normalize ? f_norm(price_chg, -5, 5) : price_chg
+
+plot(show_score ? score_d_pct    : na, "Score D",      color=score_d >= i_alert_score ? i_col_bull : i_col_neut, linewidth=i_lw + 1)
+plot(show_score ? price_chg_norm : na, "Price Chg %",  color=price_chg > 0 ? color.new(i_col_bull, 50) : color.new(i_col_bear, 50), linewidth=1)
+
+hline(show_score and i_show_lvl ? i_alert_score / 5.0 * 100 : na, "Score Threshold", color=color.new(color.lime,   40), linestyle=hline.style_dashed)
+hline(show_score and i_show_lvl ? 80  : na, "Score 4/5",    color=color.new(color.lime,   60), linestyle=hline.style_dotted)
+hline(show_score and i_show_lvl ? 100 : na, "Score Max",    color=color.new(color.yellow, 60), linestyle=hline.style_dotted)
+hline(show_score and i_show_lvl ? 50  : na, "Zero line",    color=color.new(color.gray,   70), linestyle=hline.style_dotted)
+
+// ============================================================
+// 8. PLOT — MTF MODE
+// ============================================================
+
+bool show_mtf = i_view == "MTF"
+
+plot(show_mtf ? score_w_pct  : na, "Score W",  color=i_col_w,  linewidth=i_lw + 1)
+plot(show_mtf ? score_d_pct  : na, "Score D",  color=i_col_d,  linewidth=i_lw)
+plot(show_mtf ? score_h4_pct : na, "Score H4", color=i_col_h4, linewidth=i_lw)
+
+hline(show_mtf and i_show_lvl ? 80 : na, "Score 4/5", color=color.new(color.gray, 50), linestyle=hline.style_dashed)
+hline(show_mtf and i_show_lvl ? 60 : na, "Score 3/5", color=color.new(color.gray, 70), linestyle=hline.style_dotted)
+hline(show_mtf and i_show_lvl ? 0  : na, "Zero",      color=color.new(color.gray, 80), linestyle=hline.style_dotted)
+
+bool mtf_strong = show_mtf and score_w >= i_alert_score and score_d >= i_alert_score and score_h4 >= i_alert_score
+bgcolor(mtf_strong ? color.new(color.lime, 88) : na, title="MTF Strong Signal")
+
+// ============================================================
+// 9. ALERTS
+// ============================================================
+
+alertcondition(score_d >= i_alert_score and score_d[1] < i_alert_score, "Score D crossed threshold", "APEX Score Daily threshold reached")
+alertcondition(score_w >= i_alert_score and score_d >= i_alert_score and score_h4 >= i_alert_score, "MTF Full Confluence", "APEX MTF All timeframes in confluence")
+alertcondition(i_alert_vix and vix_d >= i_vix_warn and vix_d[1] < i_vix_warn, "VIX Warning crossed", "APEX VIX crossed warning level")
+
+plotshape(score_d >= i_alert_score and score_d[1] < i_alert_score, title="Score Alert", location=location.top, style=shape.triangleup, color=color.lime, size=size.small)
